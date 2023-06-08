@@ -1,0 +1,82 @@
+library(SECNIC)
+library(Seurat)
+library(cowplot)
+library(dplyr)
+
+cells.use<-subset(pbmc_tsne1, idents = c("EC","SMC","Fibro"))#挑选出来想做的细胞, 也可以都是,不用筛选
+expr <- GetAssayData(object = cells.use, assay= "RNA", slot = "data")
+# 转换格式 
+#---------------------------------------------------------------------------------------------------------------------
+expr <- as(Class = 'matrix', object = expr)
+
+cellInfo <- data.frame(seuratCluster=Idents(cells.use))#seuratCluster就是个代号,不用变化
+cellInfo <- data.frame(cellInfo)
+
+cellTypeColumn <- "Class"
+colnames(cellInfo)[which(colnames(cellInfo)==cellTypeColumn)] <- "seuratCluster"
+
+dir.create("int")
+saveRDS(cellInfo, file="int/cellInfo.Rds")#矩阵1，细胞名字
+#---------------------------------------------------------------------------------------------------------------------
+colVars <- list(seuratCluster=c("EC"="forestgreen", 
+                           "SMC"="darkorange", 
+                           "Fibro"="magenta4"))
+colVars$seuratCluster <- colVars$seuratCluster[intersect(names(colVars$seuratCluster), cellInfo$seuratCluster)]
+saveRDS(colVars, file="int/colVars.Rds")#矩阵2，细胞名字对应不同的颜色
+
+#————————————————————————————————————————————————————————
+#————————————————————————————————————————————————————————
+#前期准备工作结束，开始运行，需要的文件一个expr，两个"int/cellInfo.Rds","int/colVars.Rds"文件，load"expr.RData":双击,yes
+library(SCENIC)
+org="hgnc" 
+dbDir="./SCENIC_REF/"   #服务器的参考数据库位置
+
+myDatasetTitle="SCENIC 0323"    # choose a name for your analysis
+data(defaultDbNames)
+dbs <- defaultDbNames[[org]]
+scenicOptions <- initializeScenic(org=org, dbDir=dbDir, dbs=dbs, datasetTitle=myDatasetTitle, nCores=70) 
+
+scenicOptions@inputDatasetInfo$cellInfo <- "int/cellInfo.Rds"
+scenicOptions@inputDatasetInfo$colVars <- "int/colVars.Rds"
+
+saveRDS(scenicOptions, file="int/scenicOptions.Rds")
+#---------------------------------------------------------------------------------------------------------------------
+exprMat <- expr
+genesKept <- geneFiltering(exprMat, scenicOptions=scenicOptions,
+                           minCountsPerGene=3*.01*ncol(exprMat),
+                           minSamples=ncol(exprMat)*.01)
+                           
+exprMat_filtered <- exprMat[genesKept, ]
+rm(exprMat)#删除不需要的
+#---------------------------------------------------------------------------------------------------------------------
+source('runSCENIC_2_createRegulons.R')#源代码里register前面加#保存起来函数，后面调用出来
+require(data.table)
+library(data.table)
+#---------------------------------------------------------------------------------------------------------------------
+runCorrelation(exprMat_filtered, scenicOptions)
+exprMat_filtered <- log2(exprMat_filtered+1) 
+runGenie3(exprMat_filtered, scenicOptions)# Run GENIE3
+
+library(SCENIC)
+scenicOptions <- readRDS("int/scenicOptions.Rds")
+scenicOptions@settings$verbose <- TRUE
+scenicOptions@settings$nCores <- 10
+scenicOptions@settings$seed <- 123
+
+#这里为了计算方便，就选择了一个库
+
+
+
+
+
+scenicOptions@settings$dbs <- scenicOptions@settings$dbs["10kb"] # For toy run
+
+runSCENIC_1_coexNetwork2modules(scenicOptions)
+runSCENIC_2_createRegulons(scenicOptions, coexMethod=c("top5perTarget")) #** Only for toy run!!
+runSCENIC_3_scoreCells(scenicOptions, exprMat_filtered)
+
+#————————————————————————————————————————————————
+#runSCENIC_2函数会报错，解决网址是：https://www.jianshu.com/p/a70ea54b656d
+source('runSCENIC_2_createRegulons.R')
+require(data.table)
+library(data.table)
